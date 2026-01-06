@@ -1,74 +1,56 @@
 from http.server import BaseHTTPRequestHandler
 import urllib.request
-import urllib.error
-import json
+import urllib.parse
+import traceback
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.handle_request('GET')
-
-    def do_POST(self):
-        self.handle_request('POST')
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
-    def handle_request(self, method):
         try:
-            # 1. 获取目标 URL (从查询参数 ?url=... 获取)
-            path_parts = self.path.split('?url=')
-            if len(path_parts) < 2:
-                self.send_response(400)
+            # 1. 简单的握手，避免直接访问报错
+            if self.path == '/' or self.path == '/favicon.ico':
+                self.send_response(200)
                 self.end_headers()
-                self.wfile.write(b"Error: Missing url parameter. Usage: ?url=https://example.com")
+                self.wfile.write("Proxy is running!".encode('utf-8'))
                 return
-            
-            target_url = path_parts[1]
-            
-            # 2. 如果是 POST，读取请求体
-            data = None
-            if method == 'POST':
-                content_length = int(self.headers.get('Content-Length', 0))
-                if content_length > 0:
-                    data = self.rfile.read(content_length)
 
-            # 3. 伪装 User-Agent 防止被秒封
+            # 2. 获取 ?url= 后面的参数
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            target_url = params.get('url', [None])[0]
+
+            if not target_url:
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write("<h1>服务正常！</h1><p>请在网址后面加上参数: ?url=https://www.google.com</p>".encode('utf-8'))
+                return
+
+            # 3. 发起请求 (逻辑直接写在这里，避免函数名冲突)
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': '*/*'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
             
-            # 如果客户端传了 Content-Type，透传过去
-            if self.headers.get('Content-Type'):
-                headers['Content-Type'] = self.headers.get('Content-Type')
-
-            # 4. 发起请求
-            req = urllib.request.Request(target_url, data=data, headers=headers, method=method)
+            # 发送请求到目标网站
+            req = urllib.request.Request(target_url, headers=headers)
             
-            with urllib.request.urlopen(req, timeout=15) as response:
-                # 5. 返回结果
+            with urllib.request.urlopen(req, timeout=10) as response:
                 self.send_response(response.status)
                 
-                # 透传响应头 (除了 hop-by-hop headers)
-                for key, value in response.headers.items():
-                    if key.lower() not in ['transfer-encoding', 'content-encoding', 'connection']:
-                        self.send_header(key, value)
+                # 转发 Content-Type
+                if response.getheader('Content-Type'):
+                    self.send_header('Content-type', response.getheader('Content-Type'))
                 
                 # 允许跨域
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 
+                # 返回内容
                 self.wfile.write(response.read())
 
-        except urllib.error.HTTPError as e:
-            self.send_response(e.code)
+        except Exception:
+            # 4. 错误处理：把错误打印在网页上
+            error_msg = traceback.format_exc()
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain; charset=utf-8')
             self.end_headers()
-            self.wfile.write(str(e.reason).encode())
-        except Exception as e:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(str(e).encode())
+            self.wfile.write(f"Server Error Log:\n{error_msg}".encode('utf-8'))
